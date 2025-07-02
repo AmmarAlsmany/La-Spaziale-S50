@@ -63,6 +63,8 @@ if coffee_machine.connect():
         coffee_machine.disconnect()
 ```
 
+or You can use the test_communction.py file to test the connection and the commands
+
 ## Available Commands
 
 ### Machine Information
