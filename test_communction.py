@@ -67,7 +67,7 @@ class LaSpazialeCoffeeMachine:
         if group_num < 1 or group_num > 4:
             raise ValueError("Group number must be 1-4")
         
-        register_addr = 256 + (group_num - 1)  # Groups start at register 256
+        register_addr = 512 + (group_num - 1)  # Groups start at register 512
         
         try:
             result = self.client.read_holding_registers(register_addr, count=1)
@@ -203,6 +203,61 @@ class LaSpazialeCoffeeMachine:
         """Start purge cycle"""
         return self.send_coffee_command(group_num, 256)
     
+    def is_group_busy(self, group_num):
+        """
+        Check if a group is busy (has an ongoing delivery)
+        Returns True if busy, False if free, None if error
+        """
+        if group_num < 1 or group_num > 4:  # Groups 1-4 as per documentation
+            raise ValueError("Group number must be 1-4")
+        
+        # According to documentation, group status is in registers 256-259 (HEX 100-103)
+        register_addr = 256 + (group_num - 1)  # Base address 256 (HEX 0x100) for group 1
+        
+        try:
+            result = self.client.read_holding_registers(register_addr, count=1)
+            if result.isError():
+                return None
+            
+            status = result.registers[0]
+            # According to documentation, any bit set means a delivery is ongoing
+            # bits 0-7 correspond to different coffee types being delivered
+            return status != 0
+        except Exception as e:
+            print(f"Error checking if group {group_num} is busy: {e}")
+            return None
+    
+    def wait_until_group_is_free(self, group_num, timeout=30, check_interval=1.0):
+        """
+        Wait until the group is free (not busy with any delivery)
+        
+        Args:
+            group_num: Group number (1-4)
+            timeout: Maximum time to wait in seconds
+            check_interval: How often to check in seconds
+        
+        Returns:
+            True if group became free within timeout, False otherwise
+        """
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            busy = self.is_group_busy(group_num)
+            
+            if busy is None:
+                print(f"Error checking group {group_num} status")
+                return False
+            
+            if not busy:
+                print(f"Group {group_num} is now free")
+                return True
+            
+            print(f"Group {group_num} is busy, waiting...")
+            time.sleep(check_interval)
+        
+        print(f"Timeout waiting for group {group_num} to become free")
+        return False
+    
     def send_water_command(self, set_num):
         """
         Send water delivery command
@@ -266,7 +321,7 @@ def main():
         
         # Scan a wide range of registers to detect changes during coffee delivery
         # print("\n=== Register Scanner ===\n")
-        group_to_use = 1  # Group to use for coffee delivery
+        group_to_use = 2  # Group to use for coffee delivery
         
         # Function to scan registers and return their values
         # def scan_registers(start_reg, end_reg, chunk_size=10):
@@ -302,13 +357,21 @@ def main():
         
         # Send coffee delivery command
         print("\n=== Delivering Coffee ===")
+        print("Starting purge cycle...")
         coffee_machine.start_purge(group_to_use)
-        time.sleep(2.0)
-        command_result = coffee_machine.deliver_single_medium(group_to_use)
-        print(f"Single short coffee delivery command sent to group {group_to_use}: {command_result}")
         
-        # Wait for coffee delivery to start
-        print("Waiting for coffee delivery to start...")
+        # Wait until the purge cycle is complete and the group is free
+        # print("Waiting for purge cycle to complete...")
+        if coffee_machine.wait_until_group_is_free(group_to_use, timeout=30):
+            # Group is now free, send the next command
+            print("Now sending single medium coffee command...")
+            command_result = coffee_machine.deliver_single_long(group_to_use)
+            print(f"Single medium coffee delivery command sent to group {group_to_use}: {command_result}")
+        else:
+            print(f"Warning: Group {group_to_use} did not become free within timeout period")
+        
+        # # Wait for coffee delivery to start
+        # print("Waiting for coffee delivery to start...")
         
         # Second scan - after sending coffee command
         # print("\nScanning register values during coffee delivery...")
@@ -341,12 +404,12 @@ def main():
         #     print("3. The machine uses a different communication protocol than expected")
         
         # Wait a bit more and do a final check
-        print("\nWaiting for coffee delivery to complete...")
-        time.sleep(5.0)  # Wait 5 more seconds
+        # print("\nWaiting for coffee delivery to complete...")
+        # coffee_machine.wait_until_group_is_free(group_to_use, timeout=60)  # Wait up to 60 seconds for completion
         
-        # Check final status of the group
-        final_status = coffee_machine.get_group_selection(group_to_use)
-        print(f"\nFinal group {group_to_use} status: {final_status}")
+        # # Check final status of the group
+        # final_status = coffee_machine.get_group_selection(group_to_use)
+        # print(f"\nFinal group {group_to_use} status: {final_status}")
         
         # Also check the command register to see if command was processed
         # cmd_reg = 512 + (group_to_use - 1)
