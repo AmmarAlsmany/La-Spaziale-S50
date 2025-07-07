@@ -61,13 +61,13 @@ class LaSpazialeCoffeeMachine:
     # Group 1: Coffee Machine State Functions
     def get_group_selection(self, group_num):
         """
-        Get current selection/delivery status for a group (1-4)
+        Get current selection/delivery status for a group (1-3)
         Returns dict with coffee types being delivered
         """
-        if group_num < 1 or group_num > 4:
-            raise ValueError("Group number must be 1-4")
+        if group_num < 1 or group_num > 3:
+            raise ValueError("Group number must be 1-3")
         
-        register_addr = 512 + (group_num - 1)  # Groups start at register 512
+        register_addr = 256 + (group_num - 1)  # Groups status starts at register 256 (HEX 0x100)
         
         try:
             result = self.client.read_holding_registers(register_addr, count=1)
@@ -90,9 +90,9 @@ class LaSpazialeCoffeeMachine:
             return None
     
     def get_sensor_fault(self, group_num):
-        """Check if volumetric sensor has fault for group (1-4)"""
-        if group_num < 1 or group_num > 4:
-            raise ValueError("Group number must be 1-4")
+        """Check if volumetric sensor has fault for group (1-3)"""
+        if group_num < 1 or group_num > 3:
+            raise ValueError("Group number must be 1-3")
         
         register_addr = 260 + (group_num - 1)  # Sensor faults start at 260
         
@@ -106,7 +106,7 @@ class LaSpazialeCoffeeMachine:
             return None
     
     def get_purge_countdown(self, group_num):
-        """Get seconds until automatic purge for group (1-4)"""
+        """Get seconds until automatic purge for group (1-3)"""
         if group_num < 1 or group_num > 3:
             raise ValueError("Group number must be 1-3")
         
@@ -146,7 +146,7 @@ class LaSpazialeCoffeeMachine:
     # Group 2: Command Functions
     def send_coffee_command(self, group_num, command):
         """
-        Send coffee delivery command to group (1-4)
+        Send coffee delivery command to group (1-3)
         
         Commands:
         1 (0x0001): Single Short Coffee
@@ -159,8 +159,8 @@ class LaSpazialeCoffeeMachine:
         128 (0x0080): Stop ongoing delivery
         256 (0x0100): Start Purge
         """
-        if group_num < 1 or group_num > 4:
-            raise ValueError("Group number must be 1-4")
+        if group_num < 1 or group_num > 3:
+            raise ValueError("Group number must be 1-3")
         
         register_addr = 512 + (group_num - 1) 
         
@@ -208,10 +208,10 @@ class LaSpazialeCoffeeMachine:
         Check if a group is busy (has an ongoing delivery)
         Returns True if busy, False if free, None if error
         """
-        if group_num < 1 or group_num > 4:  # Groups 1-4 as per documentation
-            raise ValueError("Group number must be 1-4")
+        if group_num < 1 or group_num > 3:  # Groups 1-3 as per documentation
+            raise ValueError("Group number must be 1-3")
         
-        # According to documentation, group status is in registers 256-259 (HEX 100-103)
+        # According to documentation, group status is in registers 256-258 (HEX 100-102)
         register_addr = 256 + (group_num - 1)  # Base address 256 (HEX 0x100) for group 1
         
         try:
@@ -220,9 +220,15 @@ class LaSpazialeCoffeeMachine:
                 return None
             
             status = result.registers[0]
-            # According to documentation, any bit set means a delivery is ongoing
-            # bits 0-7 correspond to different coffee types being delivered
-            return status != 0
+            # Print status value for debugging
+            print(f"Group {group_num} status register value: {status} (0x{status:04X})")
+            
+            # According to documentation, bits 0-7 indicate if a delivery is in progress
+            # Check only the relevant bits (0-7) for coffee delivery
+            delivery_mask = 0xFF  # Bits 0-7
+            is_busy = (status & delivery_mask) != 0
+            
+            return is_busy
         except Exception as e:
             print(f"Error checking if group {group_num} is busy: {e}")
             return None
@@ -232,7 +238,7 @@ class LaSpazialeCoffeeMachine:
         Wait until the group is free (not busy with any delivery)
         
         Args:
-            group_num: Group number (1-4)
+            group_num: Group number (1-3)
             timeout: Maximum time to wait in seconds
             check_interval: How often to check in seconds
         
@@ -307,9 +313,12 @@ def main():
         blocked = coffee_machine.is_machine_blocked()
         print(f"Machine Blocked: {blocked}")
         
-        # Check group status
-        print("\n=== Group Status ===")
-        for group in range(1, num_groups + 1 if num_groups else 5):
+        # Choose a group to use for coffee delivery
+        group_to_use = 2  # Using group 2
+        
+        # Check initial status of all groups
+        print("\n=== Initial Group Status ===")
+        for group in range(1, num_groups + 1 if num_groups else 4):
             selection = coffee_machine.get_group_selection(group)
             fault = coffee_machine.get_sensor_fault(group)
             countdown = coffee_machine.get_purge_countdown(group)
@@ -319,111 +328,83 @@ def main():
             print(f"  Sensor Fault: {fault}")
             print(f"  Purge Countdown: {countdown}s")
         
-        # Scan a wide range of registers to detect changes during coffee delivery
-        # print("\n=== Register Scanner ===\n")
-        group_to_use = 2  # Group to use for coffee delivery
+        # Read the status register directly to see what it contains
+        print("\n=== Direct Register Reading ===")
+        try:
+            for reg_type, base_addr in [('Status', 256), ('Command', 512)]:
+                print(f"\n{reg_type} Registers:")
+                for i in range(3):  # Read for groups 1-3
+                    addr = base_addr + i
+                    result = coffee_machine.client.read_holding_registers(addr, count=1)
+                    if not result.isError():
+                        value = result.registers[0]
+                        print(f"  Register {addr} (Group {i+1}): {value} (0x{value:04X})")
+                    else:
+                        print(f"  Error reading register {addr}")
+        except Exception as e:
+            print(f"Error during register reading: {e}")
         
-        # Function to scan registers and return their values
-        # def scan_registers(start_reg, end_reg, chunk_size=10):
-        #     register_values = {}
-            
-        #     # Scan in chunks to avoid timeout issues
-        #     for chunk_start in range(start_reg, end_reg, chunk_size):
-        #         chunk_end = min(chunk_start + chunk_size, end_reg)
-        #         print(f"Scanning registers {chunk_start}-{chunk_end-1}...")
-                
-        #         for reg in range(chunk_start, chunk_end):
-        #             try:
-        #                 result = coffee_machine.client.read_holding_registers(reg, count=1)
-        #                 if not result.isError():
-        #                     value = result.registers[0]
-        #                     if value != 0:  # Only store non-zero values to reduce noise
-        #                         register_values[reg] = value
-        #             except Exception:
-        #                 # Skip registers that can't be read
-        #                 pass
-                    
-        #     return register_values
+        # Test sequence: Start purge -> wait for completion -> deliver coffee
+        print("\n=== Coffee Delivery Test ===")
         
-        # # First scan - baseline before coffee delivery
-        # print("Scanning baseline register values before coffee delivery...")
-        # # Focus on registers that might be relevant (0-600)
-        # before_values = scan_registers(0, 600)
+        # First check if group is busy before starting
+        busy_before = coffee_machine.is_group_busy(group_to_use)
+        print(f"Group {group_to_use} busy before starting: {busy_before}")
         
-        # Print non-zero registers found
-        # print("\nNon-zero registers before coffee delivery:")
-        # for reg, value in sorted(before_values.items()):
-        #     print(f"Register {reg}: {value} (0x{value:04X})")
+        # Send purge command
+        print(f"Sending purge command to group {group_to_use}...")
+        purge_result = coffee_machine.start_purge(group_to_use)
+        print(f"Purge command sent: {purge_result}")
         
-        # Send coffee delivery command
-        print("\n=== Delivering Coffee ===")
-        print("Starting purge cycle...")
-        coffee_machine.start_purge(group_to_use)
+        # Wait a moment and check status
+        print("Waiting 2 seconds...")
+        time.sleep(2)
+        busy_after_purge = coffee_machine.is_group_busy(group_to_use)
+        print(f"Group {group_to_use} busy after purge command: {busy_after_purge}")
         
-        # Wait until the purge cycle is complete and the group is free
-        # print("Waiting for purge cycle to complete...")
+        # Read status register directly
+        status_addr = 256 + (group_to_use - 1)
+        try:
+            result = coffee_machine.client.read_holding_registers(status_addr, count=1)
+            if not result.isError():
+                value = result.registers[0]
+                print(f"Status register {status_addr} after purge: {value} (0x{value:04X})")
+                print(f"Bits set: {''.join(['1' if (value & (1 << i)) else '0' for i in range(15, -1, -1)])}")
+        except Exception as e:
+            print(f"Error reading status register: {e}")
+        
+        # Wait for purge to complete
+        print("Waiting for purge to complete...")
         if coffee_machine.wait_until_group_is_free(group_to_use, timeout=30):
-            # Group is now free, send the next command
-            print("Now sending single medium coffee command...")
-            command_result = coffee_machine.deliver_single_long(group_to_use)
-            print(f"Single medium coffee delivery command sent to group {group_to_use}: {command_result}")
+            print(f"Group {group_to_use} is now free after purge")
+            
+            # Send coffee command
+            print("Sending single long coffee command...")
+            coffee_machine.stop_delivery(group_to_use)
+            coffee_result = coffee_machine.deliver_single_long(group_to_use)
+            print(f"Coffee command sent: {coffee_result}")
+            
+            # Check if group is busy right after sending command
+            busy_after_coffee = coffee_machine.is_group_busy(group_to_use)
+            print(f"Group {group_to_use} busy after coffee command: {busy_after_coffee}")
+            
+            # Read status register directly
+            try:
+                result = coffee_machine.client.read_holding_registers(status_addr, count=1)
+                if not result.isError():
+                    value = result.registers[0]
+                    print(f"Status register {status_addr} after coffee command: {value} (0x{value:04X})")
+                    print(f"Bits set: {''.join(['1' if (value & (1 << i)) else '0' for i in range(15, -1, -1)])}")
+            except Exception as e:
+                print(f"Error reading status register: {e}")
         else:
             print(f"Warning: Group {group_to_use} did not become free within timeout period")
         
-        # # Wait for coffee delivery to start
-        # print("Waiting for coffee delivery to start...")
-        
-        # Second scan - after sending coffee command
-        # print("\nScanning register values during coffee delivery...")
-        # during_values = scan_registers(0, 600)
-        
-        # Compare before and after to find changed registers
-        # print("\n=== Changed Registers ===\n")
-        # changes_found = False
-        
-        # Check for new or changed registers
-        # for reg, value in sorted(during_values.items()):
-            # if reg not in before_values:
-            #     print(f"New register {reg}: {value} (0x{value:04X})")
-            #     changes_found = True
-            # elif before_values[reg] != value:
-            #     print(f"Changed register {reg}: {before_values[reg]} (0x{before_values[reg]:04X}) -> {value} (0x{value:04X})")
-            #     changes_found = True
-        
-        # Check for registers that disappeared
-        # for reg in sorted(before_values.keys()):
-        #     if reg not in during_values:
-        #         print(f"Register {reg} disappeared: was {before_values[reg]} (0x{before_values[reg]:04X})")
-        #         changes_found = True
-        
-        # if not changes_found:
-        #     print("No register changes detected during coffee delivery.")
-        #     print("This could mean:")
-        #     print("1. The coffee machine isn't actually starting delivery")
-        #     print("2. The status is reported in a way we're not detecting")
-        #     print("3. The machine uses a different communication protocol than expected")
-        
-        # Wait a bit more and do a final check
-        # print("\nWaiting for coffee delivery to complete...")
-        # coffee_machine.wait_until_group_is_free(group_to_use, timeout=60)  # Wait up to 60 seconds for completion
-        
-        # # Check final status of the group
-        # final_status = coffee_machine.get_group_selection(group_to_use)
-        # print(f"\nFinal group {group_to_use} status: {final_status}")
-        
-        # Also check the command register to see if command was processed
-        # cmd_reg = 512 + (group_to_use - 1)
-        # try:
-        #     cmd_result = coffee_machine.client.read_holding_registers(cmd_reg, count=1)
-        #     if not cmd_result.isError():
-        #         cmd_value = cmd_result.registers[0]
-        #         print(f"Command register {cmd_reg} value: {cmd_value} (0x{cmd_value:04X})")
-        #         if cmd_value == 0:
-        #             print("Command register is cleared - command was likely processed")
-        #         else:
-        #             print("Command register still has value - command might still be in progress")
-        # except Exception as e:
-        #     print(f"Error reading command register: {e}")
+        # Final status check
+        print("\n=== Final Group Status ===")
+        selection = coffee_machine.get_group_selection(group_to_use)
+        print(f"Group {group_to_use} final status: {selection}")
+
     
     finally:
         coffee_machine.disconnect()
